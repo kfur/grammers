@@ -31,3 +31,9 @@ toml = "0.8.8"
 [[bench]]
 name = "cipher"
 harness = false
+
+[profile.release]
+strip = true      # Автоматически вырезать символы (Rust 1.59+)
+opt-level = 3   # Оптимизировать под размер ("z") или скорость ("3" - по умолчанию)
+lto = true        # Link Time Optimization (дольше собирает, но код быстрее/меньше)
+codegen-units = 1 # Меньше параллелизма при сборке, но лучше оптимизация

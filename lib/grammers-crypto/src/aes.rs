@@ -8,43 +8,50 @@
 use aes::cipher::generic_array::GenericArray;
 use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use std::mem;
+use std::convert::TryInto;
 
-/// Encrypt the input plaintext in-place using the AES-IGE mode.
+// Вспомогательная функция для быстрого XOR 16-байтных блоков
+#[inline(always)]
+fn xor_in_place(dst: &mut [u8; 16], src: &[u8; 16]) {
+    // Безопасное преобразование в u128 для ускорения XOR
+    // Компилятор превратит это в SIMD инструкции или работу с регистрами
+    let d = u128::from_ne_bytes(*dst);
+    let s = u128::from_ne_bytes(*src);
+    *dst = (d ^ s).to_ne_bytes();
+}
+
 pub fn ige_encrypt(buffer: &mut [u8], key: &[u8; 32], iv: &[u8; 32]) {
-    assert!(buffer.len() % 16 == 0);
+    let len = buffer.len();
+    assert!(len % 16 == 0);
 
     let key = GenericArray::from_slice(key);
     let cipher = aes::Aes256::new(key);
 
-    let mut plaintext_block = [0; 16];
-    let mut iv1 = [0; 16];
-    let mut iv2 = [0; 16];
-    iv1.copy_from_slice(&iv[..16]);
-    iv2.copy_from_slice(&iv[16..]);
+    let mut iv1: [u8; 16] = iv[..16].try_into().unwrap();
+    let mut iv2: [u8; 16] = iv[16..].try_into().unwrap();
 
-    for ciphertext_block in buffer.chunks_mut(16) {
-        plaintext_block.copy_from_slice(ciphertext_block);
+    // Используем chunks_exact_mut, чтобы убрать проверки границ внутри цикла
+    for block in buffer.chunks_exact_mut(16) {
+        let block_array: &mut [u8; 16] = block.try_into().unwrap();
+
+        // Сохраняем оригинал (plaintext) для обновления iv2 в конце
+        let plaintext_block = *block_array;
 
         // block = block XOR iv1
-        ciphertext_block
-            .iter_mut()
-            .zip(plaintext_block)
-            .zip(iv1.as_ref())
-            .for_each(|((x, a), b)| *x = a ^ b);
+        xor_in_place(block_array, &iv1);
 
-        // block = encrypt(block);
-        let ciphertext_block = GenericArray::from_mut_slice(ciphertext_block);
-        cipher.encrypt_block(ciphertext_block);
+        // block = encrypt(block)
+        let g_block = GenericArray::from_mut_slice(block_array);
+        cipher.encrypt_block(g_block);
 
         // block = block XOR iv2
-        ciphertext_block
-            .iter_mut()
-            .zip(iv2.as_ref())
-            .for_each(|(x, a)| *x ^= a);
+        xor_in_place(block_array, &iv2);
 
-        // save ciphertext and adjust iv
-        iv1.copy_from_slice(ciphertext_block);
-        mem::swap(&mut iv2, &mut plaintext_block);
+        // Обновляем IVs для следующего шага
+        // iv1 становится текущим шифротекстом
+        iv1 = *block_array;
+        // iv2 становится предыдущим открытым текстом
+        iv2 = plaintext_block;
     }
 }
 
